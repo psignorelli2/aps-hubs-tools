@@ -27,7 +27,7 @@ var apsSDK = require('forge-apis');
 // APS config information, such as client ID and secret
 var config = require('../config');
 
-var cryptiles = require('cryptiles');
+var crypto = require('crypto');
 
 // this end point will logoff the user by destroying the session
 // as of now there is no APS endpoint to invalidate tokens
@@ -48,19 +48,17 @@ router.get('/api/aps/clientID', function (req, res) {
 // return the public token of the current user
 // the public token should have a limited scope (read-only)
 router.get('/user/token', function (req, res) {
-  console.log('Getting user token'); // debug
 
   // json returns empty object if the entry values are undefined
   // so let's avoid that
   var tp = req.session.public?.access_token ? req.session.public.access_token : "";
   var te = req.session.public?.expires_in ? req.session.public.expires_in : "";
-  console.log('Public token:' + tp);
-  res.json({token: tp, expires_in: te});
+  res.json({ token: tp, expires_in: te });
 });
 
 // return the APS authenticate url
 router.get('/user/authenticate', function (req, res) {
-  req.session.csrf = cryptiles.randomString(24);
+  req.session.csrf = crypto.randomBytes(24).toString('hex');
 
   console.log('using csrf: ' + req.session.csrf);
 
@@ -96,7 +94,6 @@ router.get('/callback/oauth', function (req, res) {
 
   // first get a full scope token for internal use (server-side)
   var req1 = new apsSDK.AuthClientThreeLeggedV2(config.credentials.client_id, config.credentials.client_secret, config.callbackURL, config.scopeInternal);
-  console.log(code);
   req1.getToken(code)
     .then(function (internalCredentials) {
 
@@ -105,7 +102,6 @@ router.get('/callback/oauth', function (req, res) {
         expires_in: internalCredentials.expires_in
       }
 
-      console.log('Internal token (full scope): ' + internalCredentials.access_token); // debug
 
       // then refresh and get a limited scope token that we can send to the client
       var req2 = new apsSDK.AuthClientThreeLeggedV2(config.credentials.client_id, config.credentials.client_secret, config.callbackURL, config.scopePublic);
@@ -116,7 +112,6 @@ router.get('/callback/oauth', function (req, res) {
             expires_in: publicCredentials.expires_in
           }
 
-          console.log('Public token (limited scope): ' + publicCredentials.access_token); // debug
           res.redirect('/');
         })
         .catch(function (error) {

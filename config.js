@@ -21,12 +21,12 @@
 module.exports = {
 
     // this this callback URL when creating your client ID and secret
-    callbackURL: process.env.APS_CALLBACK_URL || 'http://localhost:3000/api/aps/callback/oauth',
+    callbackURL: process.env.APS_CALLBACK_URL || 'http://localhost:3000/callback/oauth',
 
     // set enviroment variables or hard-code here
     credentials: {
-        client_id: process.env.APS_CLIENT_ID || '<replace with your consumer key>',
-        client_secret: process.env.APS_CLIENT_SECRET || '<replace with your consumer secret>'
+        client_id: process.env.APS_CLIENT_ID || 'o0z14E9cNwTyMJhDvaeJBOo0II9JXEOYG0FPpOB263LYzRFu',
+        client_secret: process.env.APS_CLIENT_SECRET || '3A0VgxAHGOgzG27fuAEDhBV0ZkrJ3bAjeGEbEMUAGaCKR7Hnd4W5AVa2tmfUhMGn'
     },
 
     // Required scopes for your application on server-side

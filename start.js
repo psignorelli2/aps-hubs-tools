@@ -20,23 +20,23 @@ const express = require('express');
 const session = require('cookie-session');
 var config = require('./config');
 const cookieParser = require('cookie-parser');
+const path = require('path');
 
-if (process.env.APS_CLIENT_ID == null || process.env.APS_CLIENT_SECRET == null) {
+if (config.credentials.client_id == null || config.credentials.client_secret == null) {
   console.warn('*****************\nWARNING: Client ID & Client Secret not defined as environment variables.\n*****************');
   return;
 }
 
 let app = express();
+
+app.use(express.static('public'));
+
 app.set('trust proxy', 1);
 
 app.use(cookieParser());
 
 app.set('port', process.env.PORT || 3000);
-app.use('/', express.static(__dirname + '/public')); // redirect static calls
-app.use('/js', express.static(__dirname + '/../node_modules/bootstrap/dist/js')); // redirect static calls
-app.use('/js', express.static(__dirname + '/../node_modules/jquery/dist')); // redirect static calls
-app.use('/css', express.static(__dirname + '/../node_modules/bootstrap/dist/css')); // redirect static calls
-app.use('/fonts', express.static(__dirname + '/../node_modules/bootstrap/dist/fonts')); // redirect static calls
+
 app.use(session({
   secret: config.sessionSecret,
   maxAge: 1000 * 60 * 60 // 1 hours to expire the session and avoid memory leak
