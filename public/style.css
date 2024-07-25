@@ -24,6 +24,70 @@ h1 {
 
 .jstree-search {
     font-style: italic;
-    color: #8b0000;
+    color: #1600da;
     font-weight: bold;
 }
+
+.node-content {
+    display: flex;
+    align-items: center;
+}
+
+.file-checkbox {
+    margin-right: 8px;
+}
+
+.file-name {
+    cursor: pointer;
+}
+
+/* Additional styles to improve appearance */
+.jstree-default .jstree-anchor {
+    line-height: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+}
+
+.jstree-default .jstree-icon {
+    display: none; /* Hide all jstree icons */
+}
+
+.jstree-default .jstree-anchor {
+    height: auto;
+    padding: 1px 5px;
+}
+
+.jstree-default .jstree-wholerow {
+    height: 28px;
+}
+
+/* Style for checkboxes */
+.file-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+/* Hover effect for file names */
+.file-name:hover {
+    text-decoration: underline;
+}
+
+/* Adjust padding for nodes without children */
+.jstree-default .jstree-leaf > .jstree-ocl {
+    display: none;
+}
+
+.jstree-default .jstree-leaf {
+    padding-left: 20px; /* Adjust this value as needed */
+}
+
+.version-checkbox, .file-checkbox {
+    margin-right: 5px;
+}
+
+.version-name, .file-name {
+    cursor: pointer;
+}
+

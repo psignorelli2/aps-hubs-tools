@@ -3,11 +3,11 @@
 // web framework
 var express = require('express');
 var router = express.Router();
-
 var bodyParser = require('body-parser');
 var jsonParser = bodyParser.json();
-
 var apsSDK = require('forge-apis');
+var archiver = require('archiver');
+
 
 /////////////////////////////////////////////////////////////////
 // Get the list of export file formats supported by the
@@ -59,6 +59,58 @@ router.get('/download', async function (req, res) {
     }
 });
 
+router.post('/downloadAll', jsonParser, async function (req, res) {
+    const { files, nameType } = req.body;
+    if (!files || files.length === 0) {
+        return res.status(400).send('No files selected');
+    }
+    const archive = archiver('zip', {
+        zlib: { level: 9 }
+    });
+    archive.on('warning', function (err) {
+        if (err.code === 'ENOENT') {
+            console.warn(err);
+        } else {
+            throw err;
+        }
+    });
+    archive.on('error', function (err) {
+        console.error('Error creating archive:', err);
+        res.status(500).json({ error: 'Failed to create archive' });
+    });
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=' + (nameType === 'original' ? 'download.zip' : 'download_numbered.zip'));
+    archive.pipe(res);
+    for (const file of files) {
+        try {
+            const { default: fetch } = await import('node-fetch');
+            let newDerivativeUrl = await getSignedUrlFromDerivative(file.mainUrn, file.pdfUrn, req.session.internal);
+            const fileResponse = await fetch(newDerivativeUrl.url, {
+                headers: {
+                    'Cookie': Object.entries(newDerivativeUrl.cookies).map(([key, value]) => `${key}=${value}`).join('; ')
+                }
+            });
+            if (!fileResponse.ok) {
+                throw new Error(`HTTP error! status: ${fileResponse.status}`);
+            }
+            const fileContent = await fileResponse.arrayBuffer();
+            const fileBuffer = Buffer.from(fileContent);
+
+            let fileName;
+            if (nameType === 'original') {
+                fileName = newDerivativeUrl.name;
+            } else {
+                fileName = newDerivativeUrl.name.split(' ')[0] + '.pdf';
+            }
+
+            archive.append(fileBuffer, { name: fileName });
+        } catch (error) {
+            console.error('Error downloading file:', error);
+        }
+    }
+    archive.finalize();
+});
+
 async function getSignedUrlFromDerivative(urn, derivative, token) {
     const { default: fetch } = await import('node-fetch');
 
@@ -69,7 +121,6 @@ async function getSignedUrlFromDerivative(urn, derivative, token) {
     };
 
     let resp = await fetch(url, options);
-    console.log(resp);
     let respJSON = await resp.json();
 
     let cookies = resp.headers.get('set-cookie');
@@ -106,6 +157,7 @@ router.get('/manifests/:urn', function (req, res) {
 
     derivatives.getManifest(urn, {}, null, req.session.internal)
         .then(function (data) {
+            console.log(data);
             res.json(data.body);
         })
         .catch(function (error) {

@@ -3,26 +3,26 @@
 // web framework
 var express = require('express');
 var router = express.Router();
-
 var bodyParser = require('body-parser');
 var jsonParser = bodyParser.json();
-
 var path = require('path');
 var fs = require('fs');
-
 var apsSDK = require('forge-apis');
+const { shallowCopy } = require('ejs/lib/utils');
 
-router.get('/projects', async function (req, res) {
-    var projects = new apsSDK.ProjectsApi();
+const fields = [
+    "id",
+    "type",
+    "links.self.href",
+    "relationships.storage.data.id",
+    "relationships.derivatives.data.id",
+    "attributes.displayName",
+    "attributes.name",
+    "attributes.extension.type",
+    "attributes.fileType",
+    "attributes.versionNumber"
+].join(',');
 
-    projects.getHubProjects(resourceId/*hub_id*/, {}, null, req.session.internal)
-        .then(function (projects) {
-            res.json(makeTree(projects.body.data, true));
-        })
-        .catch(function (error) {
-            console.log(error);
-        });
-})
 
 /////////////////////////////////////////////////////////////////
 // Provide information to the tree control on the client
@@ -82,9 +82,12 @@ router.get('/treeNode', async function (req, res) {
                 // if the caller is a folder, then show contents
                 let projectId = params[params.length - 3];
                 try {
-                    let folderContents = await searchFolders(projectId, resourceId, req.session.internal);
-                    console.log(folderContents);
-                    res.json(makeTree(folderContents, true));
+                    let [rvtContents, dwgContents] = await Promise.all([
+                        searchFolders(projectId, resourceId, req.session.internal),
+                        searchFoldersDWG(projectId, resourceId, req.session.internal)
+                    ]);
+                    let allContents = rvtContents.concat(dwgContents);
+                    res.json(makeTree(allContents, true));
                 } catch (error) {
                     console.error('Error in search:', error);
                     res.status(500).json({ error: 'Failed to fetch folder contents' });
@@ -137,7 +140,6 @@ function makeManifestTree(manifestData) {
 
     var treeList = [];
     manifestData.derivatives[0].children.forEach(function (item) {
-        // Only include items with role '2d' or '3d'
         if (item.role === '2d') {
             let pdf = item.children.find(child => child.role === 'pdf-page');
             var treeItem = {
@@ -146,7 +148,8 @@ function makeManifestTree(manifestData) {
                 type: 'viewable',
                 role: item.role,
                 pdfUrn: pdf.urn,
-                mainUrn: manifestData.urn
+                mainUrn: manifestData.urn,
+                fileName: item.name // Add this line
             };
             treeList.push(treeItem);
         }
@@ -166,6 +169,7 @@ async function searchFolders(project, resourceId, token) {
         const params = {
             "filter[fileType]": "rvt",
             "filter[attributes.extension.type]": "versions:autodesk.bim360:C4RModel",
+            "fields": fields
         };
         Object.keys(params).forEach((key) =>
             url.searchParams.append(key, params[key])
@@ -185,31 +189,48 @@ async function searchFolders(project, resourceId, token) {
 }
 
 async function searchFoldersDWG(project, resourceId, token) {
-    try {
-        const url = new URL(
-            `https://developer.api.autodesk.com/data/v1/projects/${project}/folders/${resourceId}/search`
-        );
-        const headers = {
-            Authorization: `Bearer ${token.access_token}`,
-        };
-        const params = {
-            "filter[fileType]": "dwg",
-        };
-        Object.keys(params).forEach((key) =>
-            url.searchParams.append(key, params[key])
-        );
-        const response = await fetch(url, {
-            method: "GET",
-            headers: headers,
-        });
-        if (!response.ok) {
-            throw new Error();
+    let allResults = [];
+    let pageNumber = 0;
+    const pageSize = 100;
+    let hasMoreResults = true;
+
+    while (hasMoreResults) {
+        try {
+            const url = new URL(
+                `https://developer.api.autodesk.com/data/v1/projects/${project}/folders/${resourceId}/search`
+            );
+            const headers = {
+                Authorization: `Bearer ${token.access_token}`,
+            };
+            const params = {
+                "filter[fileType]": "dwg",
+                "page[number]": pageNumber,
+                "page[limit]": pageSize,
+                "fields": fields
+            };
+            Object.keys(params).forEach((key) =>
+                url.searchParams.append(key, params[key])
+            );
+            const response = await fetch(url, {
+                method: "GET",
+                headers: headers,
+            });
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            allResults = allResults.concat(data.data);
+
+            // Check if there are more pages
+            hasMoreResults = data.links && data.links.next;
+            pageNumber++;
+        } catch (error) {
+            console.log("Error fetching DWG files:", error);
+            hasMoreResults = false;
         }
-        const data = await response.json();
-        return data.data;
-    } catch (error) {
-        console.log(error);
     }
+
+    return allResults;
 }
 
 
