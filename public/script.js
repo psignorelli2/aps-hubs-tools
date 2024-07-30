@@ -1,16 +1,16 @@
 $(document).ready(function () {
     var tokenData = {};
-    var selectedNode = null;
     var selectedFiles = new Set();
+    var selectedProjectId = null;
 
     function showLoginButton() {
         $('#loginButton').show();
-        $('#logoffButton, #convertButton').hide();
+        $('#logoffButton, #convertButton, #projectSelect').hide();
     }
 
     function showLogoffButton() {
         $('#loginButton').hide();
-        $('#logoffButton').show();
+        $('#logoffButton, #projectSelect').show();
     }
 
     function getToken() {
@@ -25,7 +25,7 @@ $(document).ready(function () {
             tokenData = data;
             if (tokenData.token) {
                 showLogoffButton();
-                initializeTree();
+                loadProjects();
             } else {
                 showLoginButton();
             }
@@ -34,6 +34,49 @@ $(document).ready(function () {
             showLoginButton();
         });
     }
+
+    function loadProjects() {
+        $.ajax({
+            url: '/dm/projects',
+            method: 'GET',
+            headers: { 'Authorization': 'Bearer ' + tokenData.token }
+        }).then(function (projects) {
+            var $select = $('#projectSelect').empty().show();
+            $select.append($('<option></option>').text('Select a project'));
+            projects.forEach(function (project) {
+                $select.append($('<option></option>')
+                    .attr('value', project.id)
+                    .text(project.attributes.name));
+            });
+        }).catch(function (error) {
+            console.error('Error loading projects:', error);
+        });
+    }
+
+    $('#projectSelect').change(function () {
+        selectedProjectId = $(this).val();
+        if (selectedProjectId) {
+            if ($('#tree').jstree(true)) {
+                $('#tree').jstree('destroy');
+            }
+            initializeTree();
+        }
+    });
+
+    $('#tree').on('click', '.version-checkbox, .file-checkbox', function (e) {
+        e.stopPropagation();
+        var $checkbox = $(this);
+        var $node = $checkbox.closest('.jstree-node');
+        var treeInstance = $('#tree').jstree(true);
+        var nodeId = $node.attr('id');
+        var nodeObj = treeInstance.get_node(nodeId);
+
+        if ($checkbox.hasClass('version-checkbox')) {
+            handleVersionCheckbox($checkbox, nodeObj, treeInstance);
+        } else {
+            updateSelectedFiles();
+        }
+    });
 
     $('#loginButton').click(function () {
         $.ajax({
@@ -59,38 +102,49 @@ $(document).ready(function () {
         });
     });
 
-    function showDownloadAllButton() {
-        $('#downloadAllButton').show();
-    }
-
-    function hideDownloadAllButton() {
-        $('#downloadAllButton').hide();
-    }
-
     function initializeTree() {
         $('#tree').jstree({
             'core': {
                 'data': function (node, callback) {
                     var href = node.id === '#' ? '#' : node.original.href;
+                    var nodeType = node.original ? node.original.type : null;
+
+                    // Show loading indicator for the node being expanded
+                    if (node.id !== '#') {
+                        $('#' + node.id + '_anchor').addClass('jstree-loading');
+                    }
+
                     $.ajax({
                         url: '/dm/treeNode',
                         method: 'GET',
-                        data: { 'href': href },
+                        data: {
+                            'href': href,
+                            'projectId': selectedProjectId
+                        },
                         headers: { 'Authorization': 'Bearer ' + tokenData.token }
                     }).then(function (data) {
                         data.forEach(function (node) {
+                            if (node.type === 'versions' || node.type === 'viewable') {
+                                node.icon = false;
+                                node.text = '<span class="node-content"><input type="checkbox" class="' +
+                                    (node.type === 'versions' ? 'version-checkbox' : 'file-checkbox') +
+                                    '" ' + (node.type === 'viewable' ? 'data-pdfurn="' + node.pdfUrn + '" data-mainurn="' + node.mainUrn + '"' : '') +
+                                    '><span class="' + (node.type === 'versions' ? 'version-name' : 'file-name') + '">' +
+                                    node.text + '</span></span>';
+                            }
                             if (node.type === 'versions') {
-                                node.icon = false;
-                                node.text = '<span class="node-content"><input type="checkbox" class="version-checkbox"><span class="version-name">' + node.text + '</span></span>';
-                            } else if (node.type === 'viewable') {
-                                node.icon = false;
-                                node.text = '<span class="node-content"><input type="checkbox" class="file-checkbox" data-pdfurn="' + node.pdfUrn + '" data-mainurn="' + node.mainUrn + '"><span class="file-name">' + node.text + '</span></span>';
+                                node.children = true; // This tells jsTree that this node has children
                             }
                         });
                         callback.call(this, data);
                     }).catch(function (error) {
                         console.error('Error fetching tree data:', error);
                         callback.call(this, []);
+                    }).always(function () {
+                        // Remove loading indicator
+                        if (node.id !== '#') {
+                            $('#' + node.id + '_anchor').removeClass('jstree-loading');
+                        }
                     });
                 }
             },
@@ -98,18 +152,20 @@ $(document).ready(function () {
             "search": {
                 "show_only_matches": false
             }
-        }).on('select_node.jstree', function (e, data) {
-            e.preventDefault();
-            return false;
-        }).on('click', '.version-checkbox', function (e) {
+        }).on('ready.jstree', function () {
+            hideLoading();
+        }).on('click', '.version-checkbox, .file-checkbox', function (e) {
             e.stopPropagation();
-            var $versionNode = $(this).closest('li');
-            var checked = $(this).prop('checked');
-            $versionNode.find('.file-checkbox').prop('checked', checked);
-            updateSelectedFiles();
-        }).on('click', '.file-checkbox', function (e) {
-            e.stopPropagation();
-            updateSelectedFiles();
+            var $checkbox = $(this);
+            var $node = $checkbox.closest('li');
+            var treeInstance = $('#tree').jstree(true);
+            var nodeObj = treeInstance.get_node($node);
+
+            if ($checkbox.hasClass('version-checkbox')) {
+                handleVersionCheckbox($checkbox, nodeObj, treeInstance);
+            } else {
+                updateSelectedFiles();
+            }
         }).on('dblclick', '.file-name', function (e) {
             e.stopPropagation();
             var node = $(this).closest('li');
@@ -118,21 +174,33 @@ $(document).ready(function () {
             if (nodeObj.original.type === 'viewable') {
                 handleViewableClick(nodeObj);
             }
-        }).on('open_node.jstree', function (e, data) {
-            if (data.node.original.type === 'projects') {
-                // When a project node is opened, open its first child (folder)
-                var firstChild = data.node.children[0];
-                if (firstChild) {
-                    $('#tree').jstree('open_node', firstChild);
-                }
-            }
-        }).on('ready.jstree', function () {
-            var tree = $('#tree').jstree(true);
-            // Open all top-level nodes
-            tree.get_json('#', { flat: true })
-                .filter(function (node) { return tree.get_parent(node) === '#'; })
-                .forEach(function (node) { tree.open_node(node.id); });
         });
+
+        setupSearch();
+    }
+
+    function handleVersionCheckbox($checkbox, nodeObj, treeInstance) {
+        var isChecked = $checkbox.prop('checked');
+
+        if (!treeInstance.is_open(nodeObj)) {
+            treeInstance.open_node(nodeObj, function () {
+                toggleChildCheckboxes(nodeObj, isChecked, treeInstance);
+            });
+        } else {
+            toggleChildCheckboxes(nodeObj, isChecked, treeInstance);
+        }
+    }
+
+    function toggleChildCheckboxes(nodeObj, isChecked, treeInstance) {
+        treeInstance.get_node(nodeObj).children.forEach(function (childId) {
+            var $childNode = $('#' + childId);
+            var $childCheckbox = $childNode.find('.file-checkbox');
+            $childCheckbox.prop('checked', isChecked);
+        });
+        updateSelectedFiles();
+    }
+
+    function setupSearch() {
         var searchTimeout = false;
         $('#search-input').keyup(function () {
             if (searchTimeout) { clearTimeout(searchTimeout); }
@@ -141,7 +209,6 @@ $(document).ready(function () {
                 if (v.length > 0) {
                     searchTree(v);
                 } else {
-                    // If search is cleared, show all nodes
                     var tree = $('#tree').jstree(true);
                     tree.clear_search();
                     tree.show_all();
@@ -153,66 +220,41 @@ $(document).ready(function () {
     function searchTree(query) {
         var tree = $('#tree').jstree(true);
         $('#search-loading').show();
-
-        // Clear previous search
-        tree.clear_search();
-
-        // Array to store matching nodes
-        var matches = [];
-
-        // Custom search function
-        tree.search(query, false, false, function (str, node) {
-            // Only search in opened version nodes
-            if (tree.is_open(node)) {
-                var text = node.text.replace(/<[^>]*>/g, ""); // Remove HTML tags
-                if (text.toLowerCase().indexOf(str.toLowerCase()) !== -1) {
-                    matches.push(node.id);
-                    return true;
-                }
-            }
-            return false; // Don't include other node types in search results
-        });
-
-        // Reveal all matching nodes and their parents
-        matches.forEach(function (nodeId) {
-            tree.show_node(nodeId);
-            tree._open_to(nodeId);
-        });
-
-        // Hide non-matching nodes
-        tree.get_json('#', { flat: true }).forEach(function (node) {
-            if (matches.indexOf(node.id) === -1 && node.type === 'versions') {
-                tree.hide_node(node.id);
-            }
-        });
-
+        tree.search(query, false, true);
         $('#search-loading').hide();
+
+        setTimeout(function () {
+            var firstMatch = $('.jstree-search').first();
+            if (firstMatch.length) {
+                scrollToNode(firstMatch);
+            }
+        }, 100);
+    }
+
+    function scrollToNode($node) {
+        var container = $('#tree');
+        var scrollTo = $node.offset().top - container.offset().top + container.scrollTop();
+
+        container.animate({
+            scrollTop: scrollTo - (container.height() / 2)
+        }, 500);
+
+        $node.addClass('highlight-search');
+        setTimeout(function () {
+            $node.removeClass('highlight-search');
+        }, 2000);
     }
 
     function handleViewableClick(node) {
-        console.log('Viewable clicked:', node);
-        var pdfurn = node.original.pdfUrn;
-        var mainUrn = node.original.mainUrn;
-
-        // Trigger the download
-        downloadFile(pdfurn, mainUrn);
+        downloadFile(node.original.pdfUrn, node.original.mainUrn);
     }
 
     function downloadFile(pdfurn, mainUrn) {
-        // Create a temporary form to submit the download request
         var form = $('<form></form>')
             .attr('action', '/md/download')
             .attr('method', 'GET')
-            .append($('<input>')
-                .attr('type', 'hidden')
-                .attr('name', 'pdfurn')
-                .attr('value', pdfurn))
-            .append($('<input>')
-                .attr('type', 'hidden')
-                .attr('name', 'mainUrn')
-                .attr('value', mainUrn));
-
-        // Append the form to the body, submit it, and remove it
+            .append($('<input>').attr('type', 'hidden').attr('name', 'pdfurn').attr('value', pdfurn))
+            .append($('<input>').attr('type', 'hidden').attr('name', 'mainUrn').attr('value', mainUrn));
         $('body').append(form);
         form.submit();
         form.remove();
@@ -227,34 +269,24 @@ $(document).ready(function () {
             });
         });
 
-        // Update version checkboxes
         $('.version-checkbox').each(function () {
-            var $versionNode = $(this).closest('li');
+            var $versionNode = $(this).closest('.jstree-node');
             var totalViewables = $versionNode.find('.file-checkbox').length;
             var checkedViewables = $versionNode.find('.file-checkbox:checked').length;
             $(this).prop('checked', totalViewables > 0 && totalViewables === checkedViewables);
         });
 
-        if (selectedFiles.size > 0) {
-            $('#downloadAllButton, #downloadAllShortButton').show();
-        } else {
-            $('#downloadAllButton, #downloadAllShortButton').hide();
-        }
+        $('#downloadAllButton, #downloadAllShortButton').toggle(selectedFiles.size > 0);
     }
 
-    $('#downloadAllShortButton').click(function () {
+    $('#downloadAllShortButton, #downloadAllButton').click(function () {
         if (selectedFiles.size > 0) {
-            downloadAllFiles('shortened');
-        }
-    });
-
-    $('#downloadAllButton').click(function () {
-        if (selectedFiles.size > 0) {
-            downloadAllFiles('original');
+            downloadAllFiles($(this).attr('id') === 'downloadAllShortButton' ? 'shortened' : 'original');
         }
     });
 
     function downloadAllFiles(nameType) {
+        showLoading();
         $.ajax({
             url: '/md/downloadAll',
             method: 'POST',
@@ -277,7 +309,18 @@ $(document).ready(function () {
             document.body.removeChild(link);
         }).catch(function (error) {
             console.error('Error downloading files:', error);
+        }).always(function () {
+            hideLoading();
         });
+    }
+
+    function showLoading(message = 'Loading...') {
+        $('#loadingMessage').text(message);
+        $('#loadingOverlay').show();
+    }
+
+    function hideLoading() {
+        $('#loadingOverlay').hide();
     }
 
     refreshToken();

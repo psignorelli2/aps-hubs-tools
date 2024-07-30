@@ -81,33 +81,43 @@ router.post('/downloadAll', jsonParser, async function (req, res) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename=' + (nameType === 'original' ? 'download.zip' : 'download_numbered.zip'));
     archive.pipe(res);
-    for (const file of files) {
-        try {
-            const { default: fetch } = await import('node-fetch');
-            let newDerivativeUrl = await getSignedUrlFromDerivative(file.mainUrn, file.pdfUrn, req.session.internal);
-            const fileResponse = await fetch(newDerivativeUrl.url, {
-                headers: {
-                    'Cookie': Object.entries(newDerivativeUrl.cookies).map(([key, value]) => `${key}=${value}`).join('; ')
+
+    try {
+        const { default: fetch } = await import('node-fetch');
+
+        // Use Promise.all to fetch all files concurrently
+        await Promise.all(files.map(async (file) => {
+            try {
+                let newDerivativeUrl = await getSignedUrlFromDerivative(file.mainUrn, file.pdfUrn, req.session.internal);
+                const fileResponse = await fetch(newDerivativeUrl.url, {
+                    headers: {
+                        'Cookie': Object.entries(newDerivativeUrl.cookies).map(([key, value]) => `${key}=${value}`).join('; ')
+                    }
+                });
+                if (!fileResponse.ok) {
+                    throw new Error(`HTTP error! status: ${fileResponse.status}`);
                 }
-            });
-            if (!fileResponse.ok) {
-                throw new Error(`HTTP error! status: ${fileResponse.status}`);
-            }
-            const fileContent = await fileResponse.arrayBuffer();
-            const fileBuffer = Buffer.from(fileContent);
+                const fileContent = await fileResponse.arrayBuffer();
+                const fileBuffer = Buffer.from(fileContent);
 
-            let fileName;
-            if (nameType === 'original') {
-                fileName = newDerivativeUrl.name;
-            } else {
-                fileName = newDerivativeUrl.name.split(' ')[0] + '.pdf';
-            }
+                let fileName;
+                if (nameType === 'original') {
+                    fileName = newDerivativeUrl.name;
+                } else {
+                    fileName = newDerivativeUrl.name.split(' ')[0] + '.pdf';
+                }
 
-            archive.append(fileBuffer, { name: fileName });
-        } catch (error) {
-            console.error('Error downloading file:', error);
-        }
+                archive.append(fileBuffer, { name: fileName });
+            } catch (error) {
+                console.error('Error downloading file:', error);
+            }
+        }));
+    } catch (error) {
+        console.error('Error in downloadAll:', error);
+        res.status(500).json({ error: 'Failed to process download request' });
+        return;
     }
+
     archive.finalize();
 });
 

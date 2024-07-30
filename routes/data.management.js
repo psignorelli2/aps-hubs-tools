@@ -8,7 +8,6 @@ var jsonParser = bodyParser.json();
 var path = require('path');
 var fs = require('fs');
 var apsSDK = require('forge-apis');
-const { shallowCopy } = require('ejs/lib/utils');
 
 const fields = [
     "id",
@@ -23,6 +22,32 @@ const fields = [
     "attributes.versionNumber"
 ].join(',');
 
+router.get('/projects', function (req, res) {
+    var hubs = new apsSDK.HubsApi();
+    console.log(req.session.internal);
+    hubs.getHubs({}, null, req.session.internal)
+        .then(function (hubsData) {
+            var projects = new apsSDK.ProjectsApi();
+            var projectPromises = hubsData.body.data.map(hub =>
+                projects.getHubProjects(hub.id, {}, null, req.session.internal)
+            );
+
+            Promise.all(projectPromises)
+                .then(function (projectsData) {
+                    var allProjects = projectsData.flatMap(p => p.body.data);
+                    res.json(allProjects);
+                })
+                .catch(function (error) {
+                    console.log(error);
+                    res.status(500).json({ error: 'Failed to fetch projects' });
+                });
+        })
+        .catch(function (error) {
+            console.log(error);
+            res.status(500).json({ error: 'Failed to fetch hubs' });
+        });
+});
+
 
 /////////////////////////////////////////////////////////////////
 // Provide information to the tree control on the client
@@ -31,53 +56,30 @@ const fields = [
 /////////////////////////////////////////////////////////////////
 router.get('/treeNode', async function (req, res) {
     var href = decodeURIComponent(req.query.href);
+    var projectId = req.query.projectId;
     if (href === '#') {
-        // # stands for ROOT
-        var hubs = new apsSDK.HubsApi();
-
         try {
-            hubs.getHubs({}, null, req.session.internal)
-                .then(function (data) {
-                    res.json(makeTree(data.body.data, true));
-                })
-                .catch(function (error) {
-                    console.log(error);
-                });
-        } catch (ex) {
-            console.log(ex);
+            // Get the hub ID
+            var hubs = new apsSDK.HubsApi();
+            let hubsData = await hubs.getHubs({}, null, req.session.internal);
+            let hub = hubsData.body.data.find(hub => hub.attributes.name === "Jedson Engineering");
+            if (!hub) {
+                throw new Error("Jedson Engineering hub not found");
+            }
+            let hubId = hub.id;
+            // Start from top folders
+            var projects = new apsSDK.ProjectsApi();
+            let topFolders = await projects.getProjectTopFolders(hubId, projectId, null, req.session.internal);
+            res.json(makeTree(topFolders.body.data, true));
+        } catch (error) {
+            console.log(error);
+            res.status(500).json({ error: 'Failed to fetch top folders: ' + error.message });
         }
     } else {
         var params = href.split('/');
         var resourceName = params[params.length - 2];
         var resourceId = params[params.length - 1];
         switch (resourceName) {
-            case 'hubs':
-                // if the caller is a hub, then show projects
-                var projects = new apsSDK.ProjectsApi();
-
-                projects.getHubProjects(resourceId/*hub_id*/, {}, null, req.session.internal)
-                    .then(function (projects) {
-                        res.json(makeTree(projects.body.data, true));
-                    })
-                    .catch(function (error) {
-                        console.log(error);
-                    });
-                break;
-            case 'projects':
-                // if the caller is a project, then show folders
-                var hubId = params[params.length - 3];
-
-                // Work with top folders instead
-                var projects = new apsSDK.ProjectsApi();
-                projects.getProjectTopFolders(hubId, resourceId, null, req.session.internal)
-                    .then(function (topFolders) {
-                        res.json(makeTree(topFolders.body.data, true));
-                    })
-                    .catch(function (error) {
-                        console.log(error);
-                    });
-
-                break;
             case 'folders':
                 // if the caller is a folder, then show contents
                 let projectId = params[params.length - 3];
@@ -189,45 +191,61 @@ async function searchFolders(project, resourceId, token) {
 }
 
 async function searchFoldersDWG(project, resourceId, token) {
-    let allResults = [];
-    let pageNumber = 0;
+    const allResults = [];
     const pageSize = 100;
-    let hasMoreResults = true;
+    const maxConcurrentRequests = 5; // Adjust based on API rate limits
 
-    while (hasMoreResults) {
-        try {
-            const url = new URL(
-                `https://developer.api.autodesk.com/data/v1/projects/${project}/folders/${resourceId}/search`
-            );
-            const headers = {
-                Authorization: `Bearer ${token.access_token}`,
-            };
-            const params = {
-                "filter[fileType]": "dwg",
-                "page[number]": pageNumber,
-                "page[limit]": pageSize,
-                "fields": fields
-            };
-            Object.keys(params).forEach((key) =>
-                url.searchParams.append(key, params[key])
-            );
-            const response = await fetch(url, {
-                method: "GET",
-                headers: headers,
-            });
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const data = await response.json();
-            allResults = allResults.concat(data.data);
+    const fetchPage = async (pageNumber) => {
+        const url = new URL(
+            `https://developer.api.autodesk.com/data/v1/projects/${project}/folders/${resourceId}/search`
+        );
+        const headers = {
+            Authorization: `Bearer ${token.access_token}`,
+        };
+        const params = {
+            "filter[fileType]": "dwg",
+            "page[number]": pageNumber,
+            "page[limit]": pageSize,
+            "fields": fields
+        };
+        Object.keys(params).forEach((key) =>
+            url.searchParams.append(key, params[key])
+        );
 
-            // Check if there are more pages
-            hasMoreResults = data.links && data.links.next;
-            pageNumber++;
-        } catch (error) {
-            console.log("Error fetching DWG files:", error);
-            hasMoreResults = false;
+        const response = await fetch(url, {
+            method: "GET",
+            headers: headers,
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
+        return response.json();
+    };
+
+    const processResults = (data) => {
+        allResults.push(...data.data);
+        return data.links && data.links.next;
+    };
+
+    try {
+        let hasMorePages = true;
+        let currentPage = 0;
+
+        while (hasMorePages) {
+            const pagePromises = [];
+            for (let i = 0; i < maxConcurrentRequests && hasMorePages; i++) {
+                pagePromises.push(fetchPage(currentPage));
+                currentPage++;
+            }
+
+            const results = await Promise.all(pagePromises);
+            for (const result of results) {
+                hasMorePages = processResults(result);
+                if (!hasMorePages) break;
+            }
+        }
+    } catch (error) {
+        console.log("Error fetching DWG files:", error);
     }
 
     return allResults;
